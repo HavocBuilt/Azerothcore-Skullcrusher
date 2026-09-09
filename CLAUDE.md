@@ -229,6 +229,14 @@ AzerothCore's extractor tools, then `scp` to the server's data directory.
 
 - Alt characters auto-questing and levelling via the playerbots altbot system.
 - AdiBags is the chosen combined-bag addon for players (auto-sorts into categories).
+- **Pending: first real test-server deployment.** Once a second machine is
+  available, run `deployment-kit/deploy.sh` against it (`template` mode, a
+  fresh box, not a clone of live player data) and go through it step by
+  step rather than unattended - the real SSH path, the actual build, and DB
+  init have only been smoke-tested locally, never against a genuine second
+  machine. Afterward, diff the target's resulting config files against this
+  server's live ones to confirm everything matches except what's supposed
+  to differ (DB host, DB password, install paths, hostname).
 
 A deployment kit already exists at `/home/gailin/deployment-kit/` (`deploy.sh`,
 see its README), covering both migration/DR (full mode) and handing a clean copy
