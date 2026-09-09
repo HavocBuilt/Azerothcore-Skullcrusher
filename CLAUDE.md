@@ -16,6 +16,25 @@ running the **liyunfan1223 playerbots fork** (not upstream AzerothCore).
 Custom module source lives under `azerothcore-playerbots/modules/`. Custom code is
 **not** in a git repo — it is packaged straight from local disk by the deployment kit.
 
+## Git / GitHub
+
+- `origin` remote = upstream `liyunfan1223/azerothcore-wotlk` (read-only in
+  practice - no push access there).
+- `fork` remote = `git@github.com:HavocBuilt/Azerothcore-Skullcrusher.git`,
+  the actual push target. Current branch `Playerbot` tracks `fork/Playerbot`.
+- The deployment kit (`/home/gailin/deployment-kit/`) is its own separate git
+  repo, pushed to `git@github.com:HavocBuilt/Skullcrusher-Redeploy.git`
+  (`main` branch) - unrelated to the AzerothCore source, don't conflate them.
+- Pushing works via a dedicated SSH key (`~/.ssh/github_skullcrusher`,
+  configured in `~/.ssh/config` for `github.com`) added to the HavocBuilt
+  GitHub account. No `gh` CLI is installed and no git identity is persisted
+  in git config (by design - commits use `-c user.name=HavocBuilt -c
+  user.email=jasonwalden@gmx.com` per-commit rather than a global config
+  write). Creating/merging PRs currently means using the GitHub web UI
+  directly (or a link like
+  `github.com/HavocBuilt/Azerothcore-Skullcrusher/compare/master...Playerbot`)
+  - there's no API access for it yet.
+
 ## Build
 
 From `azerothcore-playerbots/build/`, configured with (per `CMakeCache.txt`):
