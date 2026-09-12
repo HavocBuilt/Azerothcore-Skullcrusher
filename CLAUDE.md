@@ -68,6 +68,25 @@ make -j<N>
 
 (`<N>` = however many cores you want to give it; not recorded in the cache.)
 
+**A module-only change is not a full rebuild.** Because `MODULES=static`, editing
+one file under `modules/<mod>/src/` recompiles just that translation unit and
+relinks `worldserver` - minutes, not hours. Keep the stages separate so a failure
+is attributable and the live server stays up until the last moment:
+
+1. `nice -n 10 make -j6` - **no `install`**. This builds into the tree only; the
+   running server keeps its old binary and nothing is swapped. Use fewer jobs than
+   cores: `worldserver` is serving on the same 8-core box and saturating all of
+   them lags the game for whoever is online.
+2. Confirm the change is really in the new binary instead of trusting the exit
+   code - `nm -C build/src/server/apps/worldserver | grep <NewSymbol>`, or
+   `strings` for a new literal.
+3. `cp -a` the installed binary aside first, so rollback is a copy rather than a
+   rebuild.
+4. `make install`, then the restart by hand (Operating rules rule 1).
+
+`make install` does not clobber live configs - AzerothCore installs `.conf.dist`
+files and leaves an existing `.conf` alone.
+
 **Always ask before `make install` or restarting worldserver.** See Operating rules below.
 
 ## Services
@@ -81,6 +100,47 @@ Both run as systemd units with auto-restart:
   It also reports real players online, filtering out bots by the `rndbot` account
   name prefix. Discord roster posts are debounced: 5 minutes of stability before
   it announces.
+
+**Hard-won lesson — a DB password rotation orphaned a hardcoded credential, and
+it failed silently for three days.** `check_status.sh` held `DB_USER`/`DB_PASS`
+inline. The September 2026 rotation updated `~/.my.cnf` and the worldserver configs
+but nothing swept standalone scripts, so the notifier's player query began returning
+`Access denied`. Because that query ended in `2>/dev/null` the error vanished,
+`$PLAYERS` came back empty, and the script substituted `"none"` - and a roster of
+"none" never *changes*, so it never posted. The symptom was indistinguishable from
+"nobody is online," which is why nobody noticed.
+
+Three rules follow, and they outlive this one script:
+
+- **Never `2>/dev/null` a query that needs credentials.** It converts an auth
+  failure into a plausible-looking empty result. Let it fail loudly into
+  `journalctl` instead.
+- **`--defaults-extra-file` must be the FIRST option on a mysql command line.**
+  Placed after `-h` it fails with
+  `mysql: [ERROR] unknown variable 'defaults-extra-file=...'`.
+- **After any credential rotation, sweep for hardcoded copies** - the config files
+  are not the only place one lives. A `grep -rl <old-password> /home /etc /opt` is
+  enough. Done for the September rotation: `check_status.sh` was the only live
+  casualty; the remaining hits are `~/.my.cnf.bak`, `~/.bash_history`, and
+  pre-rotation config copies under `backups-weekly/*/configs/`. Live configs clean.
+
+The notifier's credential now lives in `/root/.acore-status.cnf` (mode `600`,
+root-owned) and is passed with `--defaults-extra-file`, so the next rotation is one
+edit in one place. Keep it out of the script. Note this fix is local to this box -
+if the deployment kit ever rebuilds `/opt/server-status` from a template, check the
+template carries it rather than the old inline password.
+
+**Diagnosing the status notifier - read the state files' mtimes before the code.**
+`status.json` is rewritten every run (~30s), but `last_state.txt` and
+`last_players.txt` are written **only when their value changes**. Comparing the three
+mtimes localizes a fault in seconds without opening the script: all three fresh means
+healthy; `status.json` fresh while `last_players.txt` is days stale means the script
+is running fine and the roster path specifically is dead. `/tmp/discord_payload.json`
+and `/tmp/discord_players_payload.json` are written immediately before each `curl`,
+so their mtimes show when a send was last *attempted* - which separates "never
+reached the webhook" from "the webhook rejected it." To test a webhook's validity
+without posting anything, `GET` it: `200` plus a JSON object means it is alive,
+`404` with code `10015` means it was deleted.
 
 Useful: `journalctl -u worldserver -f` for live logs.
 
@@ -587,6 +647,18 @@ AzerothCore's extractor tools, then `scp` to the server's data directory.
 
 ## Open items
 
+- **The status notifier's auth/world up-down alert is unproven since the credential
+  fix.** The roster path is verified end to end (a real post was confirmed arriving),
+  and the webhook answers a `GET` with `200` and accepts a `POST` with `204` - but no
+  genuine up-down-up transition has happened since. The next `worldserver` restart
+  exercises it. If no Discord message arrives then, that is a second fault,
+  independent of the credential one, and the place to look is the `curl` in the
+  state-change branch.
+- **Two stale backups hold the dead DB password in plaintext**:
+  `/opt/server-status/check_status.sh.bak-20260912_031957` and `.bak-20260912_032152`
+  (plus `~/.my.cnf.bak` and the `backups-weekly/*/configs/` copies). The password no
+  longer works, so nothing is exposed - but delete them if you would rather it not be
+  on disk. `.bak-20260912_032305` is the better rollback target regardless.
 - Alt characters auto-questing and levelling via the playerbots altbot system.
 - AdiBags is the chosen combined-bag addon for players (auto-sorts into categories).
 - **Pending: first real test-server deployment.** Once a second machine is
