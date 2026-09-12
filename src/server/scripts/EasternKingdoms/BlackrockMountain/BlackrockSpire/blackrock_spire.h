@@ -20,7 +20,7 @@
 
 #include "CreatureAIImpl.h"
 
-uint32 const EncounterCount         = 23;
+uint32 const EncounterCount         = 27;
 
 #define DataHeader "BRS"
 
@@ -54,7 +54,8 @@ enum DataTypes
     DATA_HALL_RUNE_7                = 22,
     DATA_SOLAKAR_FLAMEWREATH        = 23,
     DATA_MOR_GRAYHOOF               = 24,
-    DATA_VAELASTRASZ                = 25
+    DATA_VAELASTRASZ                = 25,
+    DATA_UBRS_DOOR                  = 26
 };
 
 enum CreaturesIds
@@ -103,13 +104,21 @@ enum AdditionalData
     AREATRIGGER_DRAGONSPIRE_HALL    = 2046,
     AREATRIGGER_BLACKROCK_STADIUM   = 2026,
     SAY_FINKLE_GANG                 = 0,
-    ITEM_UNADORNED_SEAL             = 12219
+    ITEM_UNADORNED_SEAL             = 12219,
+    ITEM_SEAL_OF_ASCENSION          = 12344
 };
 
 enum GameObjectsIds
 {
     GO_ROOKERY_EGG                  = 175124,
     // Doors
+    GO_UBRS_ENTER_DOOR              = 164725, // LBRS -> UBRS entrance, currently unscripted
+    GO_UBRS_ENTER_BRAZIER_1         = 175528,
+    GO_UBRS_ENTER_BRAZIER_2         = 175529,
+    GO_UBRS_ENTER_BRAZIER_3         = 175530,
+    GO_UBRS_ENTER_BRAZIER_4         = 175531,
+    GO_UBRS_ENTER_BRAZIER_5         = 175532,
+    GO_UBRS_ENTER_BRAZIER_6         = 175533,
     GO_EMBERSEER_IN                 = 175244, // First door to Pyroguard Emberseer
     GO_DOORS                        = 175705, // Second door to Pyroguard Emberseer
     GO_EMBERSEER_OUT                = 175153, // Door after Pyroguard Emberseer event

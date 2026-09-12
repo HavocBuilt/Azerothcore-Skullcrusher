@@ -37,7 +37,12 @@ enum EventIds
     EVENT_DRAGONSPIRE_ROOM_STORE           = 1,
     EVENT_DRAGONSPIRE_ROOM_CHECK           = 2,
 
-    EVENT_SOLAKAR_WAVE                     = 3
+    EVENT_SOLAKAR_WAVE                     = 3,
+    EVENT_UBRS_DOOR_CHECK                  = 4,
+    EVENT_UBRS_DOOR_OPEN_STAGE_1           = 5,
+    EVENT_UBRS_DOOR_OPEN_STAGE_2           = 6,
+    EVENT_UBRS_DOOR_OPEN_STAGE_3           = 7,
+    EVENT_UBRS_DOOR_OPEN_STAGE_4           = 8
 };
 
 constexpr Milliseconds TIMER_SOLAKAR_WAVE = 30s;
@@ -89,6 +94,7 @@ struct instance_blackrock_spire : public InstanceScript
         SolakarState       = NOT_STARTED;
         SolakarSummons.clear();
         VaelastraszState   = NOT_STARTED;
+        Events.ScheduleEvent(EVENT_UBRS_DOOR_CHECK, 2s);
     }
 
     void CreatureLooted(Creature* creature, LootType loot) override
@@ -177,6 +183,37 @@ struct instance_blackrock_spire : public InstanceScript
     {
         switch (go->GetEntry())
         {
+            case GO_UBRS_ENTER_DOOR:
+                go_ubrsEnterDoor = go->GetGUID();
+                if (GetBossState(DATA_UBRS_DOOR) == DONE)
+                    HandleGameObject(ObjectGuid::Empty, true, go);
+                else
+                    HandleGameObject(ObjectGuid::Empty, false, go);
+                break;
+            case GO_UBRS_ENTER_BRAZIER_1:
+                go_ubrsBrazier[0] = go->GetGUID();
+                HandleGameObject(ObjectGuid::Empty, GetBossState(DATA_UBRS_DOOR) == DONE, go);
+                break;
+            case GO_UBRS_ENTER_BRAZIER_2:
+                go_ubrsBrazier[1] = go->GetGUID();
+                HandleGameObject(ObjectGuid::Empty, GetBossState(DATA_UBRS_DOOR) == DONE, go);
+                break;
+            case GO_UBRS_ENTER_BRAZIER_3:
+                go_ubrsBrazier[2] = go->GetGUID();
+                HandleGameObject(ObjectGuid::Empty, GetBossState(DATA_UBRS_DOOR) == DONE, go);
+                break;
+            case GO_UBRS_ENTER_BRAZIER_4:
+                go_ubrsBrazier[3] = go->GetGUID();
+                HandleGameObject(ObjectGuid::Empty, GetBossState(DATA_UBRS_DOOR) == DONE, go);
+                break;
+            case GO_UBRS_ENTER_BRAZIER_5:
+                go_ubrsBrazier[4] = go->GetGUID();
+                HandleGameObject(ObjectGuid::Empty, GetBossState(DATA_UBRS_DOOR) == DONE, go);
+                break;
+            case GO_UBRS_ENTER_BRAZIER_6:
+                go_ubrsBrazier[5] = go->GetGUID();
+                HandleGameObject(ObjectGuid::Empty, GetBossState(DATA_UBRS_DOOR) == DONE, go);
+                break;
             case GO_EMBERSEER_IN:
                 go_emberseerin = go->GetGUID();
                 HandleGameObject(ObjectGuid::Empty, GetBossState(DATA_DRAGONSPIRE_ROOM) == DONE, go);
@@ -524,8 +561,68 @@ struct instance_blackrock_spire : public InstanceScript
                         CurrentSolakarWave++;
                     }
                     break;
+                case EVENT_UBRS_DOOR_CHECK:
+                    CheckUbrsDoor();
+                    if (GetBossState(DATA_UBRS_DOOR) != DONE && GetBossState(DATA_UBRS_DOOR) != IN_PROGRESS)
+                        Events.ScheduleEvent(EVENT_UBRS_DOOR_CHECK, 2s);
+                    break;
+                case EVENT_UBRS_DOOR_OPEN_STAGE_1:
+                    if (GameObject* b = instance->GetGameObject(go_ubrsBrazier[0]))
+                        HandleGameObject(ObjectGuid::Empty, true, b);
+                    if (GameObject* b = instance->GetGameObject(go_ubrsBrazier[1]))
+                        HandleGameObject(ObjectGuid::Empty, true, b);
+                    Events.ScheduleEvent(EVENT_UBRS_DOOR_OPEN_STAGE_2, 1s);
+                    break;
+                case EVENT_UBRS_DOOR_OPEN_STAGE_2:
+                    if (GameObject* b = instance->GetGameObject(go_ubrsBrazier[2]))
+                        HandleGameObject(ObjectGuid::Empty, true, b);
+                    if (GameObject* b = instance->GetGameObject(go_ubrsBrazier[3]))
+                        HandleGameObject(ObjectGuid::Empty, true, b);
+                    Events.ScheduleEvent(EVENT_UBRS_DOOR_OPEN_STAGE_3, 1s);
+                    break;
+                case EVENT_UBRS_DOOR_OPEN_STAGE_3:
+                    if (GameObject* b = instance->GetGameObject(go_ubrsBrazier[4]))
+                        HandleGameObject(ObjectGuid::Empty, true, b);
+                    if (GameObject* b = instance->GetGameObject(go_ubrsBrazier[5]))
+                        HandleGameObject(ObjectGuid::Empty, true, b);
+                    Events.ScheduleEvent(EVENT_UBRS_DOOR_OPEN_STAGE_4, 1s);
+                    break;
+                case EVENT_UBRS_DOOR_OPEN_STAGE_4:
+                    if (GameObject* door = instance->GetGameObject(go_ubrsEnterDoor))
+                        HandleGameObject(ObjectGuid::Empty, true, door);
+                    SetBossState(DATA_UBRS_DOOR, DONE);
+                    break;
                 default:
                     break;
+            }
+        }
+    }
+
+    void CheckUbrsDoor()
+    {
+        uint32 doorState = GetBossState(DATA_UBRS_DOOR);
+        if (doorState == DONE || doorState == IN_PROGRESS)
+            return;
+
+        GameObject* door = instance->GetGameObject(go_ubrsEnterDoor);
+        if (!door)
+            return;
+
+        Map::PlayerList const& players = instance->GetPlayers();
+        for (Map::PlayerList::const_iterator itr = players.begin(); itr != players.end(); ++itr)
+        {
+            Player* player = itr->GetSource();
+            if (!player || player->IsGameMaster())
+                continue;
+
+            float dist = player->GetDistance2d(door->GetPositionX(), door->GetPositionY());
+            bool hasSeal = player->HasItemCount(ITEM_SEAL_OF_ASCENSION);
+
+            if (dist <= 28.0f && hasSeal)
+            {
+                SetBossState(DATA_UBRS_DOOR, IN_PROGRESS);
+                Events.ScheduleEvent(EVENT_UBRS_DOOR_OPEN_STAGE_1, 1ms);
+                return;
             }
         }
     }
@@ -638,6 +735,8 @@ protected:
     ObjectGuid LordVictorNefarius;
     ObjectGuid TheBeast;
     ObjectGuid GeneralDrakkisath;
+    ObjectGuid go_ubrsEnterDoor;
+    ObjectGuid go_ubrsBrazier[6];
     ObjectGuid go_emberseerin;
     ObjectGuid go_doors;
     ObjectGuid go_emberseerout;
