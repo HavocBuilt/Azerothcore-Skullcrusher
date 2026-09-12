@@ -242,6 +242,65 @@ item entry for you. This is what `mod-levelup-events`' reward feature uses as
 its bags-full fallback. Also: `ChatHandler::PSendSysMessage()` takes `fmt`-style
 `{}` placeholders, not printf `%u`/`%d`.
 
+**Master profession trainer — Doctor Who `<Know It All>` (creature 900001).**
+Script `npc_master_profession_trainer` in `mod-npc-trainer` (hand-written, no
+`.git`, rsync-deployed). Gossip lists all 14 professions; picking one summons the
+matching Dalaran grandmaster trainer (entries 33608-33623) onto the player as a
+temporary summon and opens its trainer window, despawning 10s after the player
+leaves interaction range with a 5 minute failsafe. Spawned **only on GM Island**
+(map 1, guid 5300744) and meant to stay there — it is a private convenience for
+the owner and friends, not public content, so don't offer to give it a city spawn.
+
+Selecting a profession also grants every tier Apprentice -> Grand Master by casting
+the trainer teach-spells as *triggered* (`player->CastSpell(player, spellId, true)`),
+which bypasses both the level and the skill-rank gate. The skill **value** is
+untouched - only the ceiling moves, so 1->450 is still raised by crafting.
+
+**Why the bypass is required, not just convenient.** `MaxPlayerLevel = 60` on this
+realm, but the Grand Master teach-spells require level 65. That tier is therefore
+structurally unreachable here by any amount of levelling or travel - a normal
+trainer can only ever reach Master (skill 275). The same config is why 46
+`RequiredSkillPoints ... max possible skill is 300` lines appear in `Errors.log` on
+every boot (AzerothCore derives that check's ceiling from `MaxPlayerLevel * 5`);
+they are pre-existing noise about Northrend profession quests, not a fault.
+
+**Hard-won lesson — there are TWO `Spell.dbc` files on disk and they differ.**
+`DataDir = "./data"` in `worldserver.conf` means the server loads
+`azeroth-server/bin/data/dbc/`. The copy at `azeroth-server/bin/dbc/` is stale, has
+a *different field layout* (so a parser tuned to one silently mis-reads the other),
+and is missing spells outright. Always parse `bin/data/dbc/`; the live file is the
+full 3.3.5a layout, 234 fields, spell name at field 136.
+
+**Hard-won lesson — resolve profession tier spells against `trainer_spell`, not
+DBC names.** Several professions have duplicate old/new teach-spells with identical
+names. Engineering's Grand Master is **61464**, not 51305 (51305 exists and is named
+correctly but no trainer uses it); Cooking, First Aid and Fishing have the same
+trap. Take whichever ID `trainer_spell` actually references. The verified ladder:
+
+| Profession | Skill | Apprentice | Journeyman | Expert | Artisan | Master | Grand Master |
+|---|---|---|---|---|---|---|---|
+| Alchemy | 171 | 2275 | 2280 | 3465 | 11612 | 28597 | 51303 |
+| Blacksmithing | 164 | 2020 | 2021 | 3539 | 9786 | 29845 | 51298 |
+| Cooking | 185 | 2551 | 3412 | 54257 | 18261 | 54256 | 51295 |
+| Enchanting | 333 | 7414 | 7415 | 7416 | 13921 | 28030 | 51312 |
+| Engineering | 202 | 4039 | 4040 | 4041 | 12657 | 30351 | 61464 |
+| First Aid | 129 | 3279 | 3280 | 54254 | 10847 | 54255 | 50299 |
+| Fishing | 356 | 7733 | 7734 | 54083 | 18249 | 54084 | 51293 |
+| Herbalism | 182 | 2372 | 2373 | 3571 | 11994 | 28696 | 50301 |
+| Inscription | 773 | 45375 | 45376 | 45377 | 45378 | 45379 | 45380 |
+| Jewelcrafting | 755 | 25245 | 25246 | 28896 | 28899 | 28901 | 51310 |
+| Leatherworking | 165 | 2155 | 2154 | 3812 | 10663 | 32550 | 51301 |
+| Mining | 186 | 2581 | 2582 | 3568 | 10249 | 29355 | 50309 |
+| Skinning | 393 | 8615 | 8619 | 8620 | 10769 | 32679 | 50307 |
+| Tailoring | 197 | 3911 | 3912 | 3913 | 12181 | 26791 | 51308 |
+
+**Hard-won lesson — module SQL applied by hand gets reapplied on next startup.**
+`Updates.EnableDatabases = 7` means the startup updater scans
+`modules/*/data/sql/db-world/`. A file applied manually with `mysql <` is not
+recorded in `acore_world.updates`, so the updater sees it as new and runs it on the
+next boot. That is safe only because these files are written `DELETE` then `INSERT`;
+keep module SQL idempotent for exactly this reason.
+
 Ongoing custom quest recreation work (the "Skullcrusher Attunement Project," rebuilding
 the classic Onyxia attunement chain) lives at `/home/gailin/attunement/` as a numbered
 log of diagnostic/fix SQL scripts (`NN_description.sql`), applied directly to
