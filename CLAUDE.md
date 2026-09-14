@@ -84,6 +84,25 @@ is attributable and the live server stays up until the last moment:
    rebuild.
 4. `make install`, then the restart by hand (Operating rules rule 1).
 
+**A new module needs a cmake reconfigure, and that rebuilds every module.** Run `cmake ..` in
+`build/` (the cached options are kept). It regenerates
+`modules/gen_scriptloader/static/ModulesLoader.cpp`, so all modules recompile, all of
+`mod-playerbots` included: roughly an hour at `-j3`/`-j6` on this box, not minutes.
+`AC_MODULES_LIST`, which the startup DB updater uses to find each module's
+`data/sql/db-world/`, is baked in at configure time. A new module's SQL is therefore only
+auto-applied by a binary built after the reconfigure.
+
+**Pausing a build for players — launch it in its own session.** Even under `nice -n 10`, a
+`-j6` build lagged the game for Jon (playing from Australia) on 2026-09-14. `kill -STOP` on a
+`make` started from an ordinary background shell does **not** pause it. The wrapper shell
+sees the child stop, exits, and the stopped, now-orphaned process group gets SIGHUP and dies;
+the log shows `exit=147`. Nothing is lost, since re-running `make` resumes where it stopped.
+For a real pause, start the build as
+`setsid bash -c 'echo $$ > build.pgid; exec nice -n 10 make -j3 worldserver'`, then use
+`kill -STOP -<pgid>` and `kill -CONT -<pgid>`. Before resuming an interrupted build, check that
+the newest `.o` files are non-empty and readable by `nm`. Checking for real players online
+before starting a long build avoids the problem entirely.
+
 `make install` does not clobber live configs - AzerothCore installs `.conf.dist`
 files and leaves an existing `.conf` alone.
 
@@ -208,6 +227,13 @@ new file and a `tail -n +N` silently returns nothing.
   run again on the next boot, and after the 04:03 occurrence there were 0 orphan
   `mail_items` rows. To see which statements collided, `SHOW ENGINE INNODB STATUS\G` and
   read the `LATEST DETECTED DEADLOCK` section (the `acore` user can run it).
+- `Creature entry (900000) has SmartAI enabled but no SmartAI entries in the database.` —
+  King Varian's `creature_template.AIName` is `SmartAI`, although all of his behaviour is C++
+  (`npc_multi_service`). Harmless, and already present on boots before 2026-09-14 08:19.
+- `Creature (Entry: 1749) has assigned gossip menu 900185, but npcflag does not include
+  UNIT_NPC_FLAG_GOSSIP (1).` — Lady Prestor, from the Onyxia attunement work; already present
+  before 2026-09-14 08:19. Not investigated. If Prestor's gossip ever fails to appear, start
+  here.
 
 **`Playerbots.log` is empty on purpose — don't "restore" the stock `Logger.playerbots`
 line.** `worldserver.conf.dist` ships `Logger.playerbots=5,Console Playerbots`; level 5
@@ -299,15 +325,19 @@ Per `AC_MODULES_LIST`/`CONFIG_FILE_LIST` in
 actually compiled into the current `worldserver` binary:
 
 - `mod-playerbots` — the core of the server; ~525 bots run stable on the current
-  CPU. Config: `playerbots.conf`
+  CPU. Config: `playerbots.conf`. `AiPlayerbot.DisabledWithoutRealPlayer = 1`: random bots
+  log in only 30 s after a real player does and log out 300 s after the last one leaves. So
+  **0 characters online after a restart with nobody real on is expected, not a fault.**
+  Confirm with `information_schema.processlist` that `acore_playerbots` has connections
+  instead.
 - `mod-ah-bot-plus` — AH bot is GUID 806 on a **dedicated separate account**
   (works around the same-account auction restriction; don't "fix" this).
   Config: `mod_ahbot.conf`
 - `mod-multibot-bridge` — server-side only despite the name; adds finer control
   over `mod-playerbots` in group and raid contexts. Config: `MultiBotBridge.conf`
 - `mod-npc-buffer` — creature entry 601016. Config: `npc_buffer.conf`
-- `mod-npc-services` — custom C++ service NPC, creature entry **900000**. No
-  config file.
+- `mod-npc-services` — custom C++ service NPC, creature entry **900000**. Also teaches
+  Aspect of the Lone Wolf to Hunters level 20+ (see `mod-lone-wolf`). No config file.
 - `mod-npc-trainer` — consolidates all profession trainers into one NPC (Doctor Who,
   900001) with a gossip menu, backed by 14 private trainer entries 900003-900016 —
   see the Doctor Who section under Custom content. No config file.
@@ -348,6 +378,10 @@ actually compiled into the current `worldserver` binary:
   into `zone_id`, 0 excludes it everywhere), picked up on restart. Config
   (`DungeonQuestGuide.Enable`, default on): only the `.conf.dist` is installed.
   Pre-module rollback binary: `bin/worldserver.pre-dungeon-guide`.
+- `mod-lone-wolf` — custom (hand-written, no `.git`, rsync-deployed). The AuraScript and
+  `spell_dbc` rows for the Hunter spell Aspect of the Lone Wolf (900002-900004); see its
+  section under Custom content. No config file. Pre-module rollback binary:
+  `bin/worldserver.pre-lone-wolf`.
 
 **Custom creature entries in use:** 900000 (`mod-npc-services`, renamed in the DB to
 "King Varian Wrynn <Hero of Azeroth>" by `~/rename_service_npc.sql` — same NPC),
@@ -359,6 +393,11 @@ don't collide: `npc_text` 900002/900003 are the guide's greetings, and `trainer`
 900003-900016 are Doctor Who's trainer lists (stock trainer ids stop at 126). Custom
 quest ids start at **900100** (900100-900104 are the Human Hunter taming chain; stock
 quest ids stop at 26034), and spawn guids 5300900/5300901 are the two hunter trainers.
+Spell ids are yet another separate key space. Custom `spell_dbc` ids 900002-900004 are Aspect
+of the Lone Wolf; the three mount spells are 90000-90002 in `Spell.dbc`, and `spell_dbc`
+otherwise tops out at 100102. The DBC loader sizes the spell index table to the highest id,
+so going from 100102 to 900002 cost about 7 MB of pointers. That's harmless, but worth knowing
+when picking the next id.
 
 **Removed:** `mod-ollama-chat` and the local Ollama install are gone. Don't suggest
 re-adding them or assume Ollama is available.
@@ -570,6 +609,78 @@ enabled; only a warlock charming a demon turns it off, in `Unit::SetCharmedBy`.)
 | 900102 | Taming the Beast | Gray Forest Wolf (1922) | 15913 | 19676 |
 | 900103 | Taming the Beast, rewards Tame Beast | Young Forest Bear (822) | 15908 | 19597 |
 | 900104 | Training the Beast: Ada → Erma, rewards Beast Training | | | |
+
+**Aspect of the Lone Wolf (Hunter spell 900002), added 2026-09-14.** A toggled Hunter aspect
+that gives +20% damage done (all schools), -10% damage taken, +5% dodge, +5% parry and +50%
+mana regeneration, only while the hunter has no living pet, so a petless ranger isn't strictly
+worse. Stock Hunter spells and talents are untouched; another player mains Hunter. The spec
+and balance rationale are in `/home/gailin/attunement/aspect-of-the-lone-wolf-spec.md`. If it
+tests too strong, lower the damage figure first.
+
+| Spell | Role | Lives in |
+|---|---|---|
+| 900002 | The visible aspect. One effect: `SPELL_AURA_PERIODIC_DUMMY` (226), 1000 ms period, carrying the AuraScript. Class mask `0 / 0x400000 / 0`, level 20, category 47 (the shared 1 s aspect cooldown). | `spell_dbc` + client `Spell.dbc` |
+| 900003 | Hidden passive: aura 79 +20% damage done (bp 19, school mask 127), 87 -10% damage taken (bp -11), 49 +5% dodge (bp 4) | `spell_dbc` only |
+| 900004 | Hidden passive: aura 47 +5% parry (bp 4), 110 +50% mana regen (bp 49, MiscValue 0 = mana) | `spell_dbc` only |
+
+Everything is in `modules/mod-lone-wolf/`: `src/mod_lone_wolf.cpp`
+(`spell_hun_aspect_of_the_lone_wolf`), plus three DELETE-then-INSERT files in
+`data/sql/db-world/` (the 900003/900004 rows, the 900002 row, and the `spell_script_names`
+binding). The script re-evaluates on apply and on every tick: Hunter, alive, and no living pet
+means `AddAura` 900003/900004, otherwise remove them. On any removal of 900002 (aspect swap,
+death, logout, cancel) it strips both.
+
+It is taught by a gossip option on King Varian (900000, GM Island, `mod-npc-services`), shown
+to Hunters level 20+ who don't know it yet; the handler checks again before `learnSpell`,
+since a client can send an option it was never shown. It is deliberately **not** on a trainer
+list: stock trainer 7 is shared by 35 hunter trainers, and playerbots'
+`PlayerbotFactory::InitAvailableSpells` teaches random bots every spell on every class trainer
+list valid for them (`AiPlayerbot.AutoLearnTrainerSpells = 1`). The pre-edit
+`mod_npc_services.cpp` is in `~/backups/20260914-pre-lone-wolf/`.
+
+**The client row is hand-edited and must agree with the server rows.** 900002's row in
+`patch-4.mpq` is a copy of Aspect of the Hawk (13165) with these changes:
+- name, description and aura tooltip rewritten with the exact numbers
+- effect 1 = aura 226, period 1000, bp -1
+- effect 2 cleared (Hawk's proc: trigger spell 6150 and proc flags)
+- class mask `0 / 0x400000 / 0`
+- spell and base level 20
+
+If a balance value changes, change 900003/900004 **and** the tooltip. A tooltip that doesn't
+match the actual effects means the two have drifted.
+
+Hard-won lessons, each verified in the source on 2026-09-14:
+
+- **Hunter aspects are mutually exclusive through the class mask, not `spell_group`.**
+  `spell_group` holds no aspect except 53746. `SpellInfo::LoadSpellSpecific` makes any
+  Hunter-family spell whose `SpellClassMask` hits `0x00380000 / 0x00440000 / 0x00001010` a
+  `SPELL_SPECIFIC_ASPECT`, and only one of those survives per caster. Borrowing an aspect's
+  bit also borrows every talent keyed on it: the Hawk, Monkey, Cheetah and Viper bits are hit by
+  Improved Aspect of the Hawk, Aspect Mastery, Kindred Spirits and others. **Aspect of the
+  Wild's bit (`SpellClassMask_2 = 0x400000`) appears in no `Spell.dbc` class mask and no
+  `spell_proc` row**, and its three C++ checks are in damage paths for other families, which is
+  why 900002 uses it. The converse matters too: helper auras must carry **no** aspect bit, or
+  they cancel the aspect.
+- **Spell value = `EffectBasePoints` + `EffectDieSides`, so DieSides must be 1** for "stored
+  value is one less" to hold: +20% is 19, -10% is -11. Stock Defensive Stance (7376) stores
+  its -10% that way. Also set `EquippedItemClass = -1` on a `spell_dbc` row; the column
+  defaults to 0.
+- **Passive auras are never sent to the client** (`Aura::CanBeSentToClient`), so server-only
+  helper spells need no client DBC row. But passives also **survive death**
+  (`RemoveAllAurasOnDeath` skips them) and are **not saved** at logout. Whatever applies them
+  must remove them, which here is `AfterEffectRemove` on 900002; after login the next tick
+  re-applies them.
+- **A script-driven periodic check needs `SPELL_AURA_PERIODIC_DUMMY` (226) with a period.** A
+  plain `SPELL_AURA_DUMMY` (4) never calls `OnEffectPeriodic`.
+- **There is no pet dismiss or pet death script hook** in this fork, only
+  `PetScript::OnPetAddToWorld`; hence the 1-second tick.
+- **A dead hunter pet stays in the pet slot** (`Pet::Update`: "hunters' pets never get removed
+  because of death"), so "has a pet" must also check `IsAlive()`. The script resolves
+  `GetPetGUID()` with `ObjectAccessor::GetCreatureOrPetOrVehicle`, not `GetGuardianPet()`,
+  because the latter logs a fatal error and clears the slot when the GUID doesn't resolve.
+  Snake Trap snakes don't occupy the pet slot, so they don't cancel the bonus.
+- **A self-targeted `PERIODIC_DUMMY` aura counts as a buff.** `_IsPositiveEffect` has no case
+  for aura 226, so the aspect can be right-clicked off with no `spell_custom_attr` row.
 
 Ongoing custom quest recreation work (the "Skullcrusher Attunement Project," rebuilding
 the classic Onyxia attunement chain) lives at `/home/gailin/attunement/` as a numbered
@@ -898,6 +1009,27 @@ AzerothCore's extractor tools, then `scp` to the server's data directory.
 5. Prefer editing files in place over printing patches for me to paste.
 
 ## Open items
+
+- **Aspect of the Lone Wolf is verified server side but not yet in game.** Deployed
+  2026-09-14 08:19. The three `mod-lone-wolf` SQL files were applied and recorded as `MODULE`,
+  the script is bound to 900002, and neither the logs nor the journal show any Lone Wolf error.
+  - **Still to do:** the client row for 900002 in `patch-4.mpq` has to be made by hand (field
+    list in the Custom content section) and shipped with a regenerated `checksums.txt`.
+  - **Before the patch:** a GM hunter can check the bonuses with `.aura 900003`; dodge should
+    rise by 5%.
+  - **After the patch:** run the spec's Phase 4 list:
+    1. Learn it from Varian on GM Island.
+    2. Check the tooltip matches the effects.
+    3. With no pet, cast it and check the character sheet changes.
+    4. Summon the pet: the bonuses go.
+    5. Dismiss it, and separately let it die: the bonuses return in both cases.
+    6. Cast Aspect of the Hawk: it cancels Lone Wolf.
+    7. Relog with the aspect on: the state is correct.
+    8. A non-Hunter can't learn it.
+    9. No bot ever has it.
+  - **If something fails:** if the bonuses never apply, check `spell_script_names` and the
+    1-second tick first. If the numbers are right but the tooltip isn't, the client row has
+    drifted.
 
 - **Human Hunters are verified server side but not yet in game.** Deployed 2026-09-14
   03:19: the three SQL files applied as `CUSTOM`, "Loaded 63 Player Create
