@@ -183,6 +183,10 @@ after logging is up, so their warnings appear in both. A `Server.log`-only grep 
 2026-09-13 found the `playerbots.conf` duplicate and silently missed a duplicate
 `Appender.Playerbots` in `worldserver.conf` that had been warning on every boot.
 
+**`Server.log` and `Errors.log` are rewritten on every boot, not appended.** Read them
+whole after a restart; a line count taken before the restart points past the end of the
+new file and a `tail -n +N` silently returns nothing.
+
 **Known startup log noise — not faults, don't chase them:**
 
 - `SmartWaypointMgr::LoadFromDB: Path entry 476220, unexpected point id N, expected N-1`
@@ -338,10 +342,13 @@ actually compiled into the current `worldserver` binary:
 **Custom creature entries in use:** 900000 (`mod-npc-services`, renamed in the DB to
 "King Varian Wrynn <Hero of Azeroth>" by `~/rename_service_npc.sql` — same NPC),
 900001 (Doctor Who, `mod-npc-trainer`), 900002 (Dungeon Quest Guide), 900003-900016
-(Doctor Who's 14 profession trainers). The next new custom NPC should take **900017**
-or higher — check `creature_template` first. Other key spaces are separate and don't
-collide: `npc_text` 900002/900003 are the guide's greetings, and `trainer` ids
-900003-900016 are Doctor Who's trainer lists (stock trainer ids stop at 126).
+(Doctor Who's 14 profession trainers), 900017 (Garret Hollis, Northshire hunter trainer),
+900018 (Ada Brightwood, Goldshire hunter trainer). The next new custom NPC should take
+**900019** or higher — check `creature_template` first. Other key spaces are separate and
+don't collide: `npc_text` 900002/900003 are the guide's greetings, and `trainer` ids
+900003-900016 are Doctor Who's trainer lists (stock trainer ids stop at 126). Custom
+quest ids start at **900100** (900100-900104 are the Human Hunter taming chain; stock
+quest ids stop at 26034), and spawn guids 5300900/5300901 are the two hunter trainers.
 
 **Removed:** `mod-ollama-chat` and the local Ollama install are gone. Don't suggest
 re-adding them or assume Ollama is available.
@@ -503,6 +510,56 @@ EXISTS` (`dungeon_quest_guide.sql`, `levelup_events.sql`,
 `2026_09_09_00_levelup_event_rewards.sql`, `mod_reagent_bank_account_NPC.sql`) — dry-run
 those against a scratch copy of the database, or with the DDL stripped out, never
 directly in a transaction on `acore_world`.
+
+**Human Hunters (race 1, class 3), added 2026-09-14.** Stock 3.3.5a has no Human Hunter.
+The server half is three re-applicable files in `data/sql/custom/db_world/`, applied by
+the updater as `CUSTOM` (tracked in git through a `.gitignore` exception; upstream
+ignores that folder). The client half is `CharBaseInfo.dbc` in `patch-4.mpq` — see
+"Client side".
+
+| File | Adds |
+|---|---|
+| `2026_09_14_00_human_hunter.sql` | `playercreateinfo` (Northshire start), action bar, Guns in `playercreateinfo_skills`, `skillraceclassinfo_dbc` rows 117/133/632 (hunter Axes/Guns/Daggers with the Human bit), `charstartoutfit_dbc` 368/369 (copy of the Dwarf Hunter outfit) |
+| `2026_09_14_01_human_hunter_trainer_northshire.sql` | Garret Hollis <Hunter Trainer> 900017, trainer 8 (levels 2-6, same as Coldridge), guid 5300900 in the Northshire Abbey yard |
+| `2026_09_14_02_human_hunter_taming_the_beast.sql` | Ada Brightwood <Hunter Trainer> 900018, trainer 7 (full list), guid 5300901 beside Erma in Goldshire; quests 900100-900104; taming-rod conditions and SmartAI credit (below); Erma (6749) gains the quest giver flag; Young Forest Bear (822) gets `AIName = SmartAI` |
+
+Both trainers use gossip menu 7262 (the Draenei hunter trainers' menu) because the
+Dwarf trainers' menus are written in dialect. Their positions were taken from nearby
+spawns, not measured in game — fix with `.gps` and update the SQL file (re-applying it
+is harmless, every block is DELETE then INSERT).
+
+**Hard-won lesson — a new race/class combination needs `SkillRaceClassInfo`, not just
+`playercreateinfo`.** The server accepts any race/class with a `playercreateinfo` row,
+but `ObjectMgr` silently drops `playercreateinfo_skills` rows whose skill
+`GetSkillRaceClassInfo` doesn't allow for that combination, and the player can never
+hold the skill either. The stock hunter rows for Axes, Guns and Daggers leave out the
+Human bit (Bows and Crossbows don't). Check every skill against *all* existing races of
+the class, not one. The fix needs no DBC edit: AzerothCore's `*_dbc` world tables
+(`skillraceclassinfo_dbc`, `charstartoutfit_dbc`, `chrraces_dbc`, ...) override DBC rows
+with the same `ID` at load (`DBCDatabaseLoader.cpp`).
+
+**Hard-won lesson — Taming the Beast quests hardcode their quest id in spell data.** A
+taming rod casts a dummy-aura spell (e.g. 19674); when the aura ends successfully, a
+`switch` in `SpellAuraEffects.cpp` casts a final spell (e.g. 19677) that charms the beast
+and has a `QUEST_COMPLETE` effect naming the stock quest (6064). Which creature a rod
+works on is a `conditions` row (source 17, type 31). New quests can't be credited by
+those spells, and new spells would have to go into both the server and client
+`Spell.dbc`, which differ on this realm. The Human chain reuses the Dwarf rods instead:
+an `ElseGroup` 1 condition adds the Elwynn beast, and the beast's SmartAI catches the
+final spell (`SPELLHIT`, event 8) and runs `CALL_AREAEXPLOREDOREVENTHAPPENS` (action 15)
+on the invoker. Two traps: the charm is already on the beast when `SpellHit` is
+delivered and SmartAI ignores events on charmed creatures, so the row needs
+`event_flags` 512 (`SMART_EVENT_FLAG_WHILE_CHARMED`); and the loader drops action 15
+unless the quest has `SpecialFlags` 2. (A hunter's charm keeps the creature's AI
+enabled; only a warlock charming a demon turns it off, in `Unit::SetCharmedBy`.)
+
+| Quest | Step | Beast (entry) | Rod | Final spell |
+|---|---|---|---|---|
+| 900100 | The Hunter's Path: Stormwind hunter trainers 5515-5517 → Ada (`BreadcrumbForQuestId` 900101) | | | |
+| 900101 | Taming the Beast | Stonetusk Boar (113) | 15911 | 19677 |
+| 900102 | Taming the Beast | Gray Forest Wolf (1922) | 15913 | 19676 |
+| 900103 | Taming the Beast, rewards Tame Beast | Young Forest Bear (822) | 15908 | 19597 |
+| 900104 | Training the Beast: Ada → Erma, rewards Beast Training | | | |
 
 Ongoing custom quest recreation work (the "Skullcrusher Attunement Project," rebuilding
 the classic Onyxia attunement chain) lives at `/home/gailin/attunement/` as a numbered
@@ -741,9 +798,13 @@ columns; this tree has a single `id`. `quest_template_addon` likewise has no
 `NextQuestInChain`, and `quest_template` has no `RequiredRaces` — check `DESC <table>`
 rather than trusting a query copied from elsewhere.
 
-**Where the DBCs actually are.** `worldserver.conf` says `DataDir = "./data"`, but the
-live DBC files worldserver reads are at **`/home/gailin/azeroth-server/bin/dbc/`**
-(`azeroth-server/data/dbc/` does not exist). Useful when a value isn't in MySQL at all —
+**Where the DBCs actually are.** `worldserver` runs with working directory
+`/home/gailin/azeroth-server/bin` (systemd `WorkingDirectory`, confirmed 2026-09-14 via
+`/proc/<pid>/cwd`) and `DataDir = "./data"`, so the live DBC files are at
+**`/home/gailin/azeroth-server/bin/data/dbc/`**. `bin/dbc/` is an older copy and is
+stale — see the two-`Spell.dbc` lesson; other files differ too (e.g. `CharStartOutfit`
+rows). Values can also be overridden by the `*_dbc` world tables, so check those as
+well. Useful when a value isn't in MySQL at all —
 faction templates, taxi nodes, spell data. They're plain WDBC: a 20-byte header
 (`magic, recordCount, fieldCount, recordSize, stringBlockSize`) followed by fixed-size
 records, trivially parsed with a few lines of Python.
@@ -766,6 +827,44 @@ bar, status text). It checks for MPQ changes over plain HTTP from the server and
 replaces the local copy. It reads an external config file so it doesn't need a
 recompile, auto-detects the WoW folder, and uses a custom icon with a rounded
 borderless window.
+
+**Client patch pipeline.** `~/wow-updates/` is served by `wow-updates-http.service`
+(`python3 -m http.server 8080`). The launcher fetches `checksums.txt`, compares it with
+the sha256 of the player's local `patch-4.mpq`, downloads `patch-4.mpq` only on a
+mismatch, then fetches `patch-notes.lua` (the popup shows when `version` changes).
+**Regenerate `checksums.txt` every time the MPQ changes** (`sha256sum patch-4.mpq >
+checksums.txt`, run inside `wow-updates/`). It was left stale from 2026-08-30 to
+2026-09-14, so launchers either re-downloaded the patch on every launch or kept an old
+one. Back up all three files first (`~/backups/<timestamp>-pre-<change>/`) and put the
+MPQ in place under a temporary name plus `mv`, so a launcher checking mid-copy never
+gets half a file.
+
+**What `patch-4.mpq` holds (2026-09-14):** nine spell DBCs, including a `Spell.dbc` with
+custom content that is **not identical to the server's `bin/data/dbc/Spell.dbc`** —
+never copy one over the other. It also holds `CharBaseInfo.dbc` with the Human Hunter
+row. The three Dwarf taming rod spells (19674, 19687, 19548) have their enUS
+description and aura tooltip pointed at generic "Begins taming a beast..." / "Taming
+beast." strings appended to the string block, because the Human chain reuses them on
+Elwynn beasts. Their names (cast bar) are unchanged.
+
+**MPQ load order.** Later archives win, and letter patches load after numbered ones, so
+`patch-k.MPQ` overrides `patch-4.mpq`. The players' `Data/` folder (server copy at
+`~/wow-client-data-fixed/Data/`) has a third-party `patch-k.MPQ` that replaces the
+character-create GlueXML and `CharStartOutfit.dbc`. So `CharStartOutfit` edits in
+patch-4 are ignored: the creation preview shows no gear for a new race/class
+combination, though the items the server grants come from `charstartoutfit_dbc` and are
+unaffected. That creation screen gets class availability from the client API
+(`GetAvailableClasses` / `IsRaceClassValid`, which read `CharBaseInfo.dbc`), so shipping
+`CharBaseInfo.dbc` in patch-4 does work. Before shipping any DBC in patch-4, list every
+client MPQ for that file.
+
+**MPQ tooling without sudo or pip.** Nothing is installed. `apt-get download smpq
+libstorm9 libtomcrypt1 libtommath1` into a scratch folder, `dpkg-deb -x` each into one
+root, add a `libstorm.so.9 -> libstorm.so.9.22.0` symlink, and run `root/usr/bin/smpq`
+with `LD_LIBRARY_PATH=root/usr/lib:root/usr/lib/x86_64-linux-gnu`. `smpq -l` lists, `-x`
+extracts, and `smpq -a -f -C ZLIB <archive> DBFilesClient/X.dbc` (run from the folder
+that contains `DBFilesClient/`) adds or replaces a file in place. Work on a copy, then
+extract everything back out and compare md5s before deploying.
 
 Pending: map/vmap/mmap/dbc extraction from a 3.3.5a client on a Windows PC using
 AzerothCore's extractor tools, then `scp` to the server's data directory.
@@ -790,6 +889,21 @@ AzerothCore's extractor tools, then `scp` to the server's data directory.
 
 ## Open items
 
+- **Human Hunters are verified server side but not yet in game.** Deployed 2026-09-14
+  03:19: the three SQL files applied as `CUSTOM`, "Loaded 63 Player Create
+  Definitions", nothing in `Errors.log` about the new ids, and the new `patch-4.mpq` /
+  `checksums.txt` / `patch-notes.lua` (version `2026-09-14-1`) are live; the previous
+  three files are in `~/backups/20260914_025748-pre-human-hunter/`. To test: the
+  launcher downloads the patch; Human → Hunter is selectable (preview without gear is
+  expected); a new character starts in Northshire with the Dwarf Hunter gear, Auto Shot
+  works, and Guns/Axes/Daggers are in the skill list; Garret Hollis and Ada Brightwood
+  stand on the ground and train; at level 10 the taming chain completes, and the rod
+  tooltip reads "Begins taming a beast". The least certain part is the taming credit: if
+  a beast is tamed but the objective doesn't complete, start with `smart_scripts` id 10
+  on 113/1922/822 and `SMART_EVENT_FLAG_WHILE_CHARMED`. Also worth noting in passing:
+  stock `[DND] TAR` class trainers sit in phase 1 about 4 yards up in front of Northshire
+  Abbey and in Goldshire (Arena Tournament realm leftovers) — unknown whether players
+  see them.
 - **Doctor Who's Grand Master trainer lists (900003-900016) are verified server side but
   not yet in game.** Deployed 2026-09-13 23:51: SQL applied and recorded in `updates`,
   140 trainers / 820 default trainers loaded, no errors. To test: pick a profession from
