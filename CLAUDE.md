@@ -478,6 +478,32 @@ recorded in `acore_world.updates`, so the updater sees it as new and runs it on 
 next boot. That is safe only because these files are written `DELETE` then `INSERT`;
 keep module SQL idempotent for exactly this reason.
 
+**Editing an already-applied module SQL file re-runs the whole file on the next boot.**
+`Updates.Redundancy = 1`, so the updater compares each recorded file's hash with the
+file on disk and, if it changed, logs `>> Reapplying update "<file>" '<old>' -> '<new>'
+(it changed)...` and applies it again (`UpdateFetcher.cpp:350`). Every statement runs,
+not just the edited part. So to change what a module has already applied, **add a new
+file** in its `data/sql/db-world/` and leave the old one alone, unless re-running all of
+the old one is genuinely harmless. Example: Doctor Who's Grand Master lists went into a
+new `npc_master_profession_trainer_grandmaster_lists.sql` because editing
+`npc_master_profession_trainer.sql` would also have deleted and re-inserted Doctor
+Who's GM Island spawn. (The updater scans `db-world/` recursively, so `base/`,
+`updates/` or the folder root all work.)
+
+**Dry-run module SQL before a restart — and know when a rollback can't undo it.** A
+module SQL file that errors during the startup update stops worldserver from booting,
+so prove it first by piping one mysql session:
+`START TRANSACTION;` / `source <file>` / check queries / `ROLLBACK;`, then re-count
+afterwards to confirm nothing persisted. This is only a true dry run if the file has no
+statements that **implicitly commit**: `CREATE TABLE` (including `IF NOT EXISTS`),
+`ALTER TABLE`, `DROP TABLE`, `TRUNCATE`, `RENAME TABLE` all commit immediately, taking
+every earlier statement in the transaction with them. `CREATE TEMPORARY TABLE` and
+`DROP TEMPORARY TABLE` do not. Four existing module files contain `CREATE TABLE IF NOT
+EXISTS` (`dungeon_quest_guide.sql`, `levelup_events.sql`,
+`2026_09_09_00_levelup_event_rewards.sql`, `mod_reagent_bank_account_NPC.sql`) — dry-run
+those against a scratch copy of the database, or with the DDL stripped out, never
+directly in a transaction on `acore_world`.
+
 Ongoing custom quest recreation work (the "Skullcrusher Attunement Project," rebuilding
 the classic Onyxia attunement chain) lives at `/home/gailin/attunement/` as a numbered
 log of diagnostic/fix SQL scripts (`NN_description.sql`), applied directly to
