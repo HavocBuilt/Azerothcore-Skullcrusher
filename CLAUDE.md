@@ -128,7 +128,9 @@ The notifier's credential now lives in `/root/.acore-status.cnf` (mode `600`,
 root-owned) and is passed with `--defaults-extra-file`, so the next rotation is one
 edit in one place. Keep it out of the script. Note this fix is local to this box -
 if the deployment kit ever rebuilds `/opt/server-status` from a template, check the
-template carries it rather than the old inline password.
+template carries it rather than the old inline password. Both notifier paths are
+verified end to end since the fix: the roster post, and the auth/world up-down alert
+(fired on the 2026-09-13 22:25 worldserver restart and confirmed arriving in Discord).
 
 **Diagnosing the status notifier - read the state files' mtimes before the code.**
 `status.json` is rewritten every run (~30s), but `last_state.txt` and
@@ -143,6 +145,57 @@ without posting anything, `GET` it: `200` plus a JSON object means it is alive,
 `404` with code `10015` means it was deleted.
 
 Useful: `journalctl -u worldserver -f` for live logs.
+
+**Hard-won lesson — `Console.Enable = 1` under systemd burns a whole core.** The unit
+gives `worldserver` `/dev/null` as stdin, so `readline()` in `CliThread`
+(`src/server/apps/worldserver/CommandLine/CliRunnable.cpp:205`) returns EOF instantly,
+the command is empty, and the loop goes straight back round. Result: one thread pinned
+at 100% CPU and 30-50k lines of bare `AC>` per minute (~450 KB/s) in the journal, which
+also bloats it (3.9 GB when found). It hides well — total worldserver CPU near 200%
+reads as normal bot load, and it predated whatever change was being checked at the
+time. Fixed 2026-09-13 by setting `Console.Enable = 0` in `worldserver.conf` (backup:
+`worldserver.conf.bak-20260913-console`); nothing is lost since no tty is attached
+anyway. Verified after the 22:54 restart: zero `AC>` lines in the journal, one fewer
+thread (15 vs 16), and no thread near 100%. If the spam ever returns, check that
+`Console.Enable` wasn't reset by a config regenerated from `.conf.dist` (default is 1).
+
+**Technique — find a hot thread without pausing the server.** Don't attach `gdb` to the
+live `worldserver` (a 2.3 GB RelWithDebInfo binary; symbol loading freezes the game for
+everyone). Instead snapshot every thread's `wchar` from `/proc/<pid>/task/*/io` and
+`utime+stime` (fields 14+15) from `task/*/stat`, wait a few seconds, snapshot again,
+and diff. A thread with huge write growth and ~100% CPU is a spinning logger/console;
+the four `MapUpdate.Threads` at ~80% each are normal with the bots running.
+
+**Check the journal, not just `Server.log`, for config problems at boot.**
+`worldserver.conf` is parsed before the log appenders exist, so anything wrong with it
+(e.g. `Config::LoadFile: Duplicate key name ...`) is printed only to stdout and lands in
+`journalctl -u worldserver --since <start>`, never in `Server.log`. Module configs load
+after logging is up, so their warnings appear in both. A `Server.log`-only grep on
+2026-09-13 found the `playerbots.conf` duplicate and silently missed a duplicate
+`Appender.Playerbots` in `worldserver.conf` that had been warning on every boot.
+
+**Known startup log noise — not faults, don't chase them:**
+
+- `SmartWaypointMgr::LoadFromDB: Path entry 476220, unexpected point id N, expected N-1`
+  (51 lines, N = 10..60) — Windsor's escort path is missing point 9 in `waypoints`, the
+  gap described in the `waypoints`/`waypoint_data` lesson below. The path still runs.
+- `Config::LoadFile: Failed open file ...` / `Config: Missing property ...` for
+  `BotWatchdog`, `mod_dungeon_quest_guide`, `mod_levelup_events` and `MultiBotBridge` —
+  those modules only have a `.conf.dist` installed, so the built-in defaults apply.
+  Copy the `.dist` to `.conf` only if a value needs changing.
+- `Skill condition specifies invalid skill value` and the 46 `RequiredSkillPoints`
+  lines — see the level-60-cap note under the master profession trainer.
+
+**`Playerbots.log` is empty on purpose — don't "restore" the stock `Logger.playerbots`
+line.** `worldserver.conf.dist` ships `Logger.playerbots=5,Console Playerbots`; level 5
+is **Debug**, and with ~525 bots sending that to `Console` would flood the journal the
+same way the `Console.Enable` spin did. The live `worldserver.conf` has no
+`Logger.playerbots` line (its slot at line 713 had been overwritten with a duplicate of
+the `Appender.Playerbots` line, which was removed 2026-09-13; backup
+`worldserver.conf.bak-20260913-dupappender`), so the `playerbots` category falls back to
+`Logger.root=2` — errors only, to `Console Server`. If bot logs are ever needed for a
+debugging session, add a temporary `Logger.playerbots=4,Playerbots` (Info, file only, no
+`Console`) and remove it afterwards.
 
 **No remote console access.** `SOAP.Enabled = 0` in `worldserver.conf`, and
 `worldserver` runs as a plain systemd `simple` service with no attached
@@ -257,6 +310,23 @@ actually compiled into the current `worldserver` binary:
 - `mod-reagent-bank-account` — server-backed reagent bank for trade goods, gems,
   and crafting materials; requires the matching client addon, no banker NPC.
   Config: `mod_reagent_bank_account.conf`
+- `mod-dungeon-quest-guide` — custom (hand-written, no `.git`, rsync-deployed). On a
+  player entering a non-raid dungeon instance, summons a Dungeon Quest Guide (creature
+  **900002**, greeting `npc_text` 900002 / 900003) next to the nearest
+  `areatrigger_teleport` landing point. Its gossip lists that dungeon's quests the
+  player can take right now and adds the chosen one straight to the log; it does not
+  take turn-ins. A quest qualifies when `QuestSortID` = the dungeon's zone, it has a real
+  starter, and that starter has no C++ `ScriptName` or SmartAI `ACCEPTED_QUEST` (19) row
+  (those start escorts/scenes the guide would bypass — 438 skipped at load). Hand
+  corrections go in `acore_world.dungeon_quest_guide_override` (`include` 1 forces a quest
+  into `zone_id`, 0 excludes it everywhere), picked up on restart. Config
+  (`DungeonQuestGuide.Enable`, default on): only the `.conf.dist` is installed.
+  Pre-module rollback binary: `bin/worldserver.pre-dungeon-guide`.
+
+**Custom creature entries in use:** 900000 (`mod-npc-services`), 900001 (Doctor Who,
+`mod-npc-trainer`), 900002 (Dungeon Quest Guide). The next new custom NPC should take
+**900003** or higher — check `creature_template` first. `npc_text` IDs are a separate
+key space (900002/900003 are the guide's greetings), so they don't collide.
 
 **Removed:** `mod-ollama-chat` and the local Ollama install are gone. Don't suggest
 re-adding them or assume Ollama is available.
@@ -647,13 +717,15 @@ AzerothCore's extractor tools, then `scp` to the server's data directory.
 
 ## Open items
 
-- **The status notifier's auth/world up-down alert is unproven since the credential
-  fix.** The roster path is verified end to end (a real post was confirmed arriving),
-  and the webhook answers a `GET` with `200` and accepts a `POST` with `204` - but no
-  genuine up-down-up transition has happened since. The next `worldserver` restart
-  exercises it. If no Discord message arrives then, that is a second fault,
-  independent of the credential one, and the place to look is the `curl` in the
-  state-change branch.
+- **`mod-dungeon-quest-guide` has not been tested in game yet.** Server side is verified
+  (SQL applied, creature 900002 and both greetings present, 163 zones indexed, no
+  errors), but no real player has entered a dungeon with it live. To test: take a
+  character into a 5-man (e.g. Deadmines), confirm the guide appears near the entrance
+  facing the arrival point, that its list matches quests the character can actually
+  take, that accepting one adds it to the log, and that the empty-list greeting shows
+  when nothing qualifies. Worth also checking a multi-entrance dungeon (Dire Maul,
+  Maraudon) spawns it at the right door. If a quest is missing or wrongly offered, fix it
+  in `dungeon_quest_guide_override` rather than in code.
 - **Two stale backups hold the dead DB password in plaintext**:
   `/opt/server-status/check_status.sh.bak-20260912_031957` and `.bak-20260912_032152`
   (plus `~/.my.cnf.bak` and the `backups-weekly/*/configs/` copies). The password no
