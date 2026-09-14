@@ -87,6 +87,15 @@ is attributable and the live server stays up until the last moment:
 `make install` does not clobber live configs - AzerothCore installs `.conf.dist`
 files and leaves an existing `.conf` alone.
 
+**`make install` is not a plain copy — don't read a `cmp` mismatch as a bad install.**
+It re-runs the build first, and the git revision stamp (`GitRevision.cpp`) is often
+regenerated, which relinks **both** `worldserver` and `authserver` and installs both
+(the running authserver is unaffected until its own next restart). CMake also rewrites
+the RUNPATH on install: the build-tree binary carries a placeholder of colons, the
+installed one `/home/gailin/azeroth-server/lib` — exactly 31 bytes, so
+`cmp -l | wc -l` = 31 with identical sizes is the expected result. Verify the installed
+binary by searching it for a new string literal instead (e.g. Python `mmap.find`).
+
 **Always ask before `make install` or restarting worldserver.** See Operating rules below.
 
 ## Services
@@ -213,7 +222,9 @@ only appears after a full worldserver restart, even though the menu, the clickab
 options and their conditions all hot-reload fine. When building gossip-driven content,
 expect the option to work immediately and the greeting paragraph to be missing until the
 next restart, and don't go hunting for a bad `TextID` over it. Check this command table
-before promising that any given table can be reloaded live.
+before promising that any given table can be reloaded live. (`.reload trainer` does
+exist and reloads `trainer`, `trainer_spell` and `creature_default_trainer` together —
+`cs_reload.cpp:767`.)
 
 ## Database
 
@@ -283,8 +294,9 @@ actually compiled into the current `worldserver` binary:
 - `mod-npc-buffer` — creature entry 601016. Config: `npc_buffer.conf`
 - `mod-npc-services` — custom C++ service NPC, creature entry **900000**. No
   config file.
-- `mod-npc-trainer` — consolidates all profession trainers into one NPC with a
-  gossip menu. No config file.
+- `mod-npc-trainer` — consolidates all profession trainers into one NPC (Doctor Who,
+  900001) with a gossip menu, backed by 14 private trainer entries 900003-900016 —
+  see the Doctor Who section under Custom content. No config file.
 - `mod-homebrew-gm`. Config: `HomebrewGM.conf`
 - `mod-pvp-titles`. Config: `mod_pvptitles.conf`
 - `mod-weekendbonus` — 1.25x multiplier. Config: `mod_weekendbonus.conf`
@@ -323,10 +335,13 @@ actually compiled into the current `worldserver` binary:
   (`DungeonQuestGuide.Enable`, default on): only the `.conf.dist` is installed.
   Pre-module rollback binary: `bin/worldserver.pre-dungeon-guide`.
 
-**Custom creature entries in use:** 900000 (`mod-npc-services`), 900001 (Doctor Who,
-`mod-npc-trainer`), 900002 (Dungeon Quest Guide). The next new custom NPC should take
-**900003** or higher — check `creature_template` first. `npc_text` IDs are a separate
-key space (900002/900003 are the guide's greetings), so they don't collide.
+**Custom creature entries in use:** 900000 (`mod-npc-services`, renamed in the DB to
+"King Varian Wrynn <Hero of Azeroth>" by `~/rename_service_npc.sql` — same NPC),
+900001 (Doctor Who, `mod-npc-trainer`), 900002 (Dungeon Quest Guide), 900003-900016
+(Doctor Who's 14 profession trainers). The next new custom NPC should take **900017**
+or higher — check `creature_template` first. Other key spaces are separate and don't
+collide: `npc_text` 900002/900003 are the guide's greetings, and `trainer` ids
+900003-900016 are Doctor Who's trainer lists (stock trainer ids stop at 126).
 
 **Removed:** `mod-ollama-chat` and the local Ollama install are gone. Don't suggest
 re-adding them or assume Ollama is available.
@@ -374,12 +389,44 @@ its bags-full fallback. Also: `ChatHandler::PSendSysMessage()` takes `fmt`-style
 
 **Master profession trainer — Doctor Who `<Know It All>` (creature 900001).**
 Script `npc_master_profession_trainer` in `mod-npc-trainer` (hand-written, no
-`.git`, rsync-deployed). Gossip lists all 14 professions; picking one summons the
-matching Dalaran grandmaster trainer (entries 33608-33623) onto the player as a
-temporary summon and opens its trainer window, despawning 10s after the player
-leaves interaction range with a 5 minute failsafe. Spawned **only on GM Island**
-(map 1, guid 5300744) and meant to stay there — it is a private convenience for
-the owner and friends, not public content, so don't offer to give it a city spawn.
+`.git`, rsync-deployed). Gossip lists all 14 professions; picking one summons that
+profession's private trainer (entries **900003-900016**, "Alchemy <Grand Master
+Trainer>" etc.) onto the player as a temporary summon and opens its trainer window,
+despawning 10s after the player leaves interaction range with a 5 minute failsafe.
+Spawned **only on GM Island** (map 1, guid 5300744) and meant to stay there — it is a
+private convenience for the owner and friends, not public content, so don't offer to
+give it a city spawn.
+
+**Hard-won lesson — the stock profession-trainer entries don't teach Northrend
+recipes.** Until 2026-09-13 Doctor Who summoned 33608-33623, which an old comment called
+"Dalaran grandmaster trainers". They are not: they're plain "Alchemy"/"Mining" NPCs
+spawned in Outland (map 530) using the *Master*-tier `trainer_spell` lists, which stop
+around skill 325-375 — so the Grand Master rank was granted but most 376-450 recipes
+(and e.g. Smelt Cobalt/Saronite/Titanium) could never be learned. In the stock data the
+complete lists are scattered: each profession's Grand Master list is on named Northrend
+trainers (several of whom are quest givers, so summoning a copy would drag their quests
+along), specialization recipes live only on specialist trainers, and the complete
+Alchemy (65) and Enchanting (94) lists have no creature at all. Don't judge a trainer by
+its subname or a code comment — count its `trainer_spell` rows and `MAX(ReqSkillRank)`.
+
+The fix is `data/sql/db-world/npc_master_profession_trainer_grandmaster_lists.sql`:
+copies of the 33608-series templates (model, faction, addon, locales) as 900003-900016,
+each with its own `trainer` (id = entry) whose list is the union of every stock
+`trainer.Type = 2` trainer whose rows are mostly that skill, deduplicated with the
+cheapest row winning (stock duplicates only differ in price). It is built with
+`INSERT ... SELECT` and temporary tables, so it needs to run as one mysql session (the
+DB updater does this) and was dry-run inside `START TRANSACTION ... ROLLBACK` first — a
+module SQL file that errors at startup stops worldserver from booting. Result: 1557
+rows, zero stock tradeskill recipes missing, e.g. Alchemy 97, Blacksmithing 248,
+Engineering 178, Inscription 234. Specialization recipes keep their `ReqAbility`, so the
+window only lets a player learn their own specialization's. ReqLevel was left alone:
+six Engineering recipes (five Goblin, plus Turbo-Charged Flying Machine) need level
+65/70 and stay unlearnable at the level-60 cap. Recipes from drops, vendors and
+reputation are outside any trainer list by nature. Rollback binary:
+`bin/worldserver.pre-trainer-lists`.
+
+The same change fixed the confirmation message, which used printf `%s` and printed
+literally — the `PSendSysMessage` placeholder lesson above, found in the wild.
 
 Selecting a profession also grants every tier Apprentice -> Grand Master by casting
 the trainer teach-spells as *triggered* (`player->CastSpell(player, spellId, true)`),
@@ -389,7 +436,7 @@ untouched - only the ceiling moves, so 1->450 is still raised by crafting.
 **Why the bypass is required, not just convenient.** `MaxPlayerLevel = 60` on this
 realm, but the Grand Master teach-spells require level 65. That tier is therefore
 structurally unreachable here by any amount of levelling or travel - a normal
-trainer can only ever reach Master (skill 275). The same config is why 46
+trainer can only ever reach Master (skill 375). The same config is why 46
 `RequiredSkillPoints ... max possible skill is 300` lines appear in `Errors.log` on
 every boot (AzerothCore derives that check's ceiling from `MaxPlayerLevel * 5`);
 they are pre-existing noise about Northrend profession quests, not a fault.
@@ -717,6 +764,16 @@ AzerothCore's extractor tools, then `scp` to the server's data directory.
 
 ## Open items
 
+- **Doctor Who's Grand Master trainer lists (900003-900016) are verified server side but
+  not yet in game.** Deployed 2026-09-13 23:51: SQL applied and recorded in `updates`,
+  140 trainers / 820 default trainers loaded, no errors. To test: pick a profession from
+  Doctor Who; the window should be titled "<Profession> <Grand Master Trainer>", list
+  recipes up to 450 (above-skill ones greyed out), and chat should say "You are now a
+  Grand Master of <Profession>." (no literal `%s`). Gailin's Alchemy at 306 is a good
+  check — 306-325 recipes weren't reachable before. If a list looks wrong, fix the SQL
+  file, apply it by hand (`mysql acore_world < file`, safe since it is idempotent) and
+  run in-game `.reload trainer` — no restart needed for list-only changes. Editing the
+  file changes its hash, so the updater re-applies it on the next boot too.
 - **`mod-dungeon-quest-guide` has not been tested in game yet.** Server side is verified
   (SQL applied, creature 900002 and both greetings present, 163 zones indexed, no
   errors), but no real player has entered a dungeon with it live. To test: take a
