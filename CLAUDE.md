@@ -1046,6 +1046,28 @@ AzerothCore's extractor tools, then `scp` to the server's data directory.
   stock `[DND] TAR` class trainers sit in phase 1 about 4 yards up in front of Northshire
   Abbey and in Goldshire (Arena Tournament realm leftovers) — unknown whether players
   see them.
+  - **In game 2026-09-14: creation, Northshire start and titles work, but hunter trainers
+    show an empty list.** Tested on Malcolm (guid 1126, Human Hunter, level 20 via
+    HomebrewGM SET_LEVEL, 0 copper) at Garret Hollis (900017) and Ulfir Ironbeard (5516,
+    GM Island). **The server side is ruled out:** the Train option appeared (no
+    `GOSSIP_OPTION_TRAINER` error in `Errors.log`, where `Logger.sql.sql` writes), and
+    replaying `Player::IsSpellFitByClassAndRace` against `bin/data/dbc` plus the
+    `skillraceclassinfo_dbc` overrides passes all 172 spells of trainer 7 and all 5 of
+    trainer 8 for Human, exactly as for Dwarf. Skills 50/51/163 have RaceMask 0xffffffff.
+    `patch-4.mpq`'s `Spell.dbc` matches the server's numerically for every trainer spell.
+    SET_LEVEL only dispatches `.character level` and teaches nothing, so "already knows
+    everything" is ruled out too. The suspect is the client.
+  - **Next, in game:** (1) the trainer window's Available/Unavailable/Used filter dropdown;
+    (2) whether Malcolm's spellbook has the Beast Mastery/Marksmanship/Survival tabs and
+    the skills panel lists them; (3) the same GM Island trainer with a non-Human hunter:
+    if that sees spells and Malcolm doesn't, dig into the client's skill DBCs. Also ask
+    whether "empty" means the training window opens with no spells, or the gossip has
+    no training option. Malcolm needs gold before he can buy anything.
+  - **Trap:** `~/azeroth-server/bin/dbc/` is a stale 3.2-era copy (222-field `Spell.dbc`,
+    max spell id 57091) that the server does not load. `DataDir = "./data"` with
+    `WorkingDirectory=bin`, so the live files are `bin/data/dbc/`. `~/wow-client-data-fixed`
+    `locale-enUS.MPQ` holds that same old set and lacks the locale patch MPQs, so it is
+    not a faithful copy of the players' client DBCs.
 - **Doctor Who's Grand Master trainer lists (900003-900016) are verified server side but
   not yet in game.** Deployed 2026-09-13 23:51: SQL applied and recorded in `updates`,
   140 trainers / 820 default trainers loaded, no errors. To test: pick a profession from
