@@ -198,6 +198,16 @@ new file and a `tail -n +N` silently returns nothing.
   Copy the `.dist` to `.conf` only if a value needs changing.
 - `Skill condition specifies invalid skill value` and the 46 `RequiredSkillPoints`
   lines — see the level-60-cap note under the master profession trainer.
+- `[1213] Deadlock found when trying to get lock; try restarting transaction` (once,
+  some boots only — first seen 2026-09-14 04:03) — a race in stock startup mail cleanup.
+  `World.cpp:848-849` sends `DELETE mi FROM mail_items mi LEFT JOIN mail m ... WHERE m.id
+  IS NULL` and `UPDATE mail m LEFT JOIN mail_items mi ... SET m.has_items=0` back to back
+  with async `CharacterDatabase.Execute`, so they can run at the same time on two
+  connections and lock `mail` rows in opposite order. MySQL rolls one back, and plain
+  `Execute` is not retried (only transactions are, in `Transaction.cpp`). Harmless: both
+  run again on the next boot, and after the 04:03 occurrence there were 0 orphan
+  `mail_items` rows. To see which statements collided, `SHOW ENGINE INNODB STATUS\G` and
+  read the `LATEST DETECTED DEADLOCK` section (the `acore` user can run it).
 
 **`Playerbots.log` is empty on purpose — don't "restore" the stock `Logger.playerbots`
 line.** `worldserver.conf.dist` ships `Logger.playerbots=5,Console Playerbots`; level 5
