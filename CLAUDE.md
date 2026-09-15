@@ -1031,38 +1031,35 @@ AzerothCore's extractor tools, then `scp` to the server's data directory.
     1-second tick first. If the numbers are right but the tooltip isn't, the client row has
     drifted.
 
-- **Human Hunters are verified server side but not yet in game.** Deployed 2026-09-14
-  03:19: the three SQL files applied as `CUSTOM`, "Loaded 63 Player Create
-  Definitions", nothing in `Errors.log` about the new ids, and the new `patch-4.mpq` /
-  `checksums.txt` / `patch-notes.lua` (version `2026-09-14-1`) are live; the previous
-  three files are in `~/backups/20260914_025748-pre-human-hunter/`. To test: the
-  launcher downloads the patch; Human → Hunter is selectable (preview without gear is
-  expected); a new character starts in Northshire with the Dwarf Hunter gear, Auto Shot
-  works, and Guns/Axes/Daggers are in the skill list; Garret Hollis and Ada Brightwood
-  stand on the ground and train; at level 10 the taming chain completes, and the rod
-  tooltip reads "Begins taming a beast". The least certain part is the taming credit: if
-  a beast is tamed but the objective doesn't complete, start with `smart_scripts` id 10
-  on 113/1922/822 and `SMART_EVENT_FLAG_WHILE_CHARMED`. Also worth noting in passing:
-  stock `[DND] TAR` class trainers sit in phase 1 about 4 yards up in front of Northshire
-  Abbey and in Goldshire (Arena Tournament realm leftovers) — unknown whether players
-  see them.
-  - **In game 2026-09-14: creation, Northshire start and titles work, but hunter trainers
-    show an empty list.** Tested on Malcolm (guid 1126, Human Hunter, level 20 via
-    HomebrewGM SET_LEVEL, 0 copper) at Garret Hollis (900017) and Ulfir Ironbeard (5516,
-    GM Island). **The server side is ruled out:** the Train option appeared (no
-    `GOSSIP_OPTION_TRAINER` error in `Errors.log`, where `Logger.sql.sql` writes), and
-    replaying `Player::IsSpellFitByClassAndRace` against `bin/data/dbc` plus the
-    `skillraceclassinfo_dbc` overrides passes all 172 spells of trainer 7 and all 5 of
-    trainer 8 for Human, exactly as for Dwarf. Skills 50/51/163 have RaceMask 0xffffffff.
-    `patch-4.mpq`'s `Spell.dbc` matches the server's numerically for every trainer spell.
-    SET_LEVEL only dispatches `.character level` and teaches nothing, so "already knows
-    everything" is ruled out too. The suspect is the client.
-  - **Next, in game:** (1) the trainer window's Available/Unavailable/Used filter dropdown;
-    (2) whether Malcolm's spellbook has the Beast Mastery/Marksmanship/Survival tabs and
-    the skills panel lists them; (3) the same GM Island trainer with a non-Human hunter:
-    if that sees spells and Malcolm doesn't, dig into the client's skill DBCs. Also ask
-    whether "empty" means the training window opens with no spells, or the gossip has
-    no training option. Malcolm needs gold before he can buy anything.
+- **Human Hunters work in game up to the trainers; the taming chain is untested.**
+  Deployed 2026-09-14 03:19: the three SQL files applied as `CUSTOM`, "Loaded 63 Player
+  Create Definitions", nothing in `Errors.log` about the new ids, and the new
+  `patch-4.mpq` / `checksums.txt` / `patch-notes.lua` (version `2026-09-14-1`) are live;
+  the previous three files are in `~/backups/20260914_025748-pre-human-hunter/`.
+  - **Confirmed in game (2026-09-14/15):** creation, Northshire start and titles work.
+    Hunter trainers list spells both on GM Island (Ulfir Ironbeard, 5516) and in
+    Northshire (Garret Hollis, 900017, a handful of level 2-6 spells as intended).
+    An earlier "empty list" report on Malcolm (guid 1126) was not a bug. The server side
+    had been ruled out (replaying `Player::IsSpellFitByClassAndRace` passes every spell of
+    trainers 7 and 8 for Human), so the cause was most likely the trainer window's
+    Available/Unavailable filter or the character's level at the time.
+  - **A level-1 hunter has no Beast Mastery spellbook tab, and that is normal for every
+    race.** A tab only appears once a spell from that skill line is known. At level 1 a
+    hunter knows Auto Shot (Marksmanship) and Raptor Strike (Survival), both
+    auto-learned; the first Beast Mastery spell is Aspect of the Monkey at level 4, then
+    Tame Beast/Call Pet/Revive Pet/Dismiss Pet at 10. No hunter entry for skills
+    50/51/163 in `SkillLineAbility.dbc` is race-restricted, and `patch-4.mpq` ships no
+    skill DBCs.
+  - **Still to test:** buy Aspect of the Monkey at level 4+ and check the Beast Mastery tab
+    appears; at level 10 run the taming chain from Ada Brightwood (Goldshire) and check the
+    rod tooltip reads "Begins taming a beast". The least certain part is the taming credit:
+    if a beast is tamed but the objective doesn't complete, start with `smart_scripts` id
+    10 on 113/1922/822 and `SMART_EVENT_FLAG_WHILE_CHARMED`. Malcolm is back at level 1
+    (HomebrewGM SET_LEVEL), has 0 copper, and still knows Aspect of the Lone Wolf from
+    when he was 20 — set his level and give him gold before testing.
+  - Worth noting in passing: stock `[DND] TAR` class trainers sit in phase 1 about 4 yards
+    up in front of Northshire Abbey and in Goldshire (Arena Tournament realm leftovers) —
+    unknown whether players see them.
   - **Trap:** `~/azeroth-server/bin/dbc/` is a stale 3.2-era copy (222-field `Spell.dbc`,
     max spell id 57091) that the server does not load. `DataDir = "./data"` with
     `WorkingDirectory=bin`, so the live files are `bin/data/dbc/`. `~/wow-client-data-fixed`
