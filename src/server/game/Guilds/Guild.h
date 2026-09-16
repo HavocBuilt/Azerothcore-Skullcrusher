@@ -22,6 +22,7 @@
 #include "ObjectMgr.h"
 #include "Optional.h"
 #include "Player.h"
+#include <functional>
 #include <set>
 #include <unordered_map>
 
@@ -777,6 +778,10 @@ public:
     // Bank
     void SwapItems(Player* player, uint8 tabId, uint8 slotId, uint8 destTabId, uint8 destSlotId, uint32 splitedAmount);
     void SwapItemsWithInventory(Player* player, bool toChar, uint8 tabId, uint8 slotId, uint8 playerBag, uint8 playerSlotId, uint32 splitedAmount);
+    // Skullcrusher (mod-bank-sort): packs one tab's items into its first slots, stable-sorted by
+    // `before`, in one transaction and with no bank log entries. Returns the number of slots
+    // whose contents changed, or nothing if the tab hasn't been purchased.
+    Optional<uint32> SortBankTab(uint8 tabId, std::function<bool(Item const*, Item const*)> const& before);
 
     // pussywizard
     uint64 GetTotalBankMoney() const { return m_bankMoney; }

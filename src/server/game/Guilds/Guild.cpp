@@ -2433,6 +2433,45 @@ void Guild::SwapItemsWithInventory(Player* player, bool toChar, uint8 tabId, uin
         _MoveItems(&charData, &bankData, splitedAmount);
 }
 
+// Skullcrusher (mod-bank-sort). Unlike SwapItems this writes no GUILD_BANK_LOG_MOVE_ITEM
+// entries: a full sort would otherwise push the tab's real deposit/withdraw history out of
+// its capped log. Viewers get one partial update listing every changed slot, emptied ones
+// included, so the client can't keep a stale item in a vacated slot.
+Optional<uint32> Guild::SortBankTab(uint8 tabId, std::function<bool(Item const*, Item const*)> const& before)
+{
+    BankTab* tab = GetBankTab(tabId);
+    if (!tab)
+        return std::nullopt;
+
+    std::vector<Item*> items;
+    items.reserve(GUILD_BANK_MAX_SLOTS);
+    for (uint8 slotId = 0; slotId < GUILD_BANK_MAX_SLOTS; ++slotId)
+        if (Item* item = tab->GetItem(slotId))
+            items.push_back(item);
+
+    std::stable_sort(items.begin(), items.end(), before);
+
+    CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
+    SlotIds changedSlots;
+    for (uint8 slotId = 0; slotId < GUILD_BANK_MAX_SLOTS; ++slotId)
+    {
+        // Slots are rewritten in ascending order, so this slot still holds its old item
+        Item* item = slotId < items.size() ? items[slotId] : nullptr;
+        if (tab->GetItem(slotId) == item)
+            continue;
+
+        tab->SetItem(trans, slotId, item);
+        changedSlots.insert(slotId);
+    }
+
+    if (changedSlots.empty())
+        return 0;
+
+    CharacterDatabase.CommitTransaction(trans);
+    _SendBankContentUpdate(tabId, changedSlots);
+    return uint32(changedSlots.size());
+}
+
 // Bank tabs
 void Guild::SetBankTabText(uint8 tabId, std::string_view text)
 {
