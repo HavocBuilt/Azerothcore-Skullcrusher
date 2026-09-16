@@ -382,6 +382,19 @@ actually compiled into the current `worldserver` binary:
   `spell_dbc` rows for the Hunter spell Aspect of the Lone Wolf (900002-900004); see its
   section under Custom content. No config file. Pre-module rollback binary:
   `bin/worldserver.pre-lone-wolf`.
+- `mod-bank-sort` — custom (hand-written, no `.git`, rsync-deployed). Player chat commands
+  `.sort bank` (targeted banker in range) and `.sort guildbank <1-6>` (at a guild vault,
+  needs deposit rights on the tab). Recipes go first, grouped by profession name, then
+  required skill rank, then name; everything else keeps its order after them. The personal
+  bank moves items with `Player::SwapItem`, never swapping two items with the same entry
+  (that would merge stacks), and leaves bags and special-purpose bank bags alone. **The
+  guild bank needs a core patch:** `Guild::SortBankTab` in `Guild.h`/`Guild.cpp` (marked
+  "Skullcrusher (mod-bank-sort)"), because bank tabs, logging and client updates are
+  private. It rewrites changed slots in one transaction with no `GUILD_BANK_LOG_MOVE_ITEM`
+  entries (a sort through `SwapItems` would flood the capped tab log) and sends one
+  partial update listing every changed slot. Watch for conflicts in `Guild.cpp` on
+  upstream merges. No config file. Pre-module rollback binary:
+  `bin/worldserver.pre-bank-sort`. Confirmed working in game 2026-09-15.
 
 **Custom creature entries in use:** 900000 (`mod-npc-services`, renamed in the DB to
 "King Varian Wrynn <Hero of Azeroth>" by `~/rename_service_npc.sql` — same NPC),
@@ -1065,6 +1078,11 @@ AzerothCore's extractor tools, then `scp` to the server's data directory.
     `WorkingDirectory=bin`, so the live files are `bin/data/dbc/`. `~/wow-client-data-fixed`
     `locale-enUS.MPQ` holds that same old set and lacks the locale patch MPQs, so it is
     not a faithful copy of the players' client DBCs.
+- **`mod-bank-sort` works in game** — confirmed by a player 2026-09-15, on the build
+  installed that day (worldserver restarted 07:19:37 on `rev. 0c5faf9d14dd+`). The
+  `Guild::SortBankTab` core patch is committed on `Playerbot` as `534b0ac41`, **but not
+  pushed to `fork`**; the module itself stays untracked like every hand-written module.
+  Rollback binary is still `bin/worldserver.pre-bank-sort`.
 - **Doctor Who's Grand Master trainer lists (900003-900016) are verified server side but
   not yet in game.** Deployed 2026-09-13 23:51: SQL applied and recorded in `updates`,
   140 trainers / 820 default trainers loaded, no errors. To test: pick a profession from
