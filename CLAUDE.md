@@ -254,6 +254,16 @@ someone has to run them from an in-game GM account, or `worldserver` needs a
 full restart to pick up DB changes on its own. Don't try to hunt for a
 console workaround; just ask for the in-game reload or a restart.
 
+**Never set `Console.Enable = 1`.** With no TTY on stdin the console loop reads EOF,
+reprints its `AC>` prompt and loops as fast as the CPU allows. It ran that way from
+2026-09-13 14:00 to 22:39 — about 2 million journal messages an hour, ~4 GB of
+`user-1000@*.journal` archives and roughly 135 CPU-hours burned in `systemd-journald`.
+Setting it back to `0` stopped it dead. The tell is `ps` showing `systemd-journal` high
+in the list: note that `ps`'s `%CPU` is a lifetime average, so check the instantaneous
+figure (sample `/proc/<pid>/stat` fields 14+15, or use `top`) before concluding anything
+is wrong now. `/etc/systemd/journald.conf.d/99-size-cap.conf` caps the journal at 1 GB
+so a future spin cannot reach the 10%-of-disk default (~44 GB here).
+
 **There is no `.reload npc_text`.** The reload command table in
 `src/server/scripts/Commands/cs_reload.cpp` has `conditions`, `creature_text`,
 `creature_template`, `gossip_menu`, `gossip_menu_option`, `smart_scripts` and
