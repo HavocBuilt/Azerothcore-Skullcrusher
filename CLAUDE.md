@@ -1023,15 +1023,35 @@ AzerothCore's extractor tools, then `scp` to the server's data directory.
 
 ## Open items
 
-- **Aspect of the Lone Wolf is verified server side but not yet in game.** Deployed
+- **Aspect of the Lone Wolf is trainable in game; the behaviour is untested.** Deployed
   2026-09-14 08:19. The three `mod-lone-wolf` SQL files were applied and recorded as `MODULE`,
   the script is bound to 900002, and neither the logs nor the journal show any Lone Wolf error.
-  - **Still to do:** the client row for 900002 in `patch-4.mpq` has to be made by hand (field
-    list in the Custom content section) and shipped with a regenerated `checksums.txt`.
+  Confirmed 2026-09-15: it can be learned from Varian on GM Island (Phase 4 step 1) and
+  learning it visibly changes stats, so the server-side aura is reaching the player. How
+  the spell *renders* client side (name, icon, tooltip) has not been looked at closely
+  yet — that is the part the missing client row would break, not the effect.
+  - **The client row exists only on Gailin's own machine.** It was added by hand to
+    `Spell.dbc` in a `patch-4.mpq` on the Windows client box (`gailin-cosplay`), not to
+    the served copy. `~/wow-updates/patch-4.mpq` is still the 2026-09-14 04:00 build
+    (sha256 `5798b5e9…`, matching `checksums.txt`), so **no other player has the row** —
+    their launcher has nothing newer to fetch, and Lone Wolf will render without a proper
+    name, icon or tooltip for them even though the aura works. Note also that being
+    trainable proves nothing about the client: the train succeeds off the server's
+    `npc_trainer` row, while everything visible comes from the client's `Spell.dbc`.
+  - **Still to do, in order:**
+    1. Confirm which MPQ on the Windows box was actually edited — it may not be the one
+       the client loads, and a stray `patch-k.MPQ` would shadow `patch-4.mpq` anyway
+       (letter patches win; see MPQ load order above). Gailin planned to re-verify in
+       game before trusting it.
+    2. Copy that MPQ back to `~/wow-updates/` under a temporary name plus `mv`, backing
+       up all three files to `~/backups/<timestamp>-pre-lone-wolf-client/` first.
+    3. Regenerate `checksums.txt` (`sha256sum patch-4.mpq > checksums.txt` inside
+       `wow-updates/`) — without this the launcher will not ship the new file.
+    4. Bump `patch-notes.lua` and add a Lone Wolf line; it currently sits at version
+       `2026-09-14-2` and mentions only Human Hunters and the dungeon quest guide.
   - **Before the patch:** a GM hunter can check the bonuses with `.aura 900003`; dodge should
     rise by 5%.
-  - **After the patch:** run the spec's Phase 4 list:
-    1. Learn it from Varian on GM Island.
+  - **Remaining Phase 4 list** (step 1 done):
     2. Check the tooltip matches the effects.
     3. With no pet, cast it and check the character sheet changes.
     4. Summon the pet: the bonuses go.
@@ -1047,7 +1067,8 @@ AzerothCore's extractor tools, then `scp` to the server's data directory.
 - **Human Hunters work in game up to the trainers; the taming chain is untested.**
   Deployed 2026-09-14 03:19: the three SQL files applied as `CUSTOM`, "Loaded 63 Player
   Create Definitions", nothing in `Errors.log` about the new ids, and the new
-  `patch-4.mpq` / `checksums.txt` / `patch-notes.lua` (version `2026-09-14-1`) are live;
+  `patch-4.mpq` / `checksums.txt` / `patch-notes.lua` are live (the notes have since been
+  bumped to version `2026-09-14-2`);
   the previous three files are in `~/backups/20260914_025748-pre-human-hunter/`.
   - **Confirmed in game (2026-09-14/15):** creation, Northshire start and titles work.
     Hunter trainers list spells both on GM Island (Ulfir Ironbeard, 5516) and in
@@ -1093,15 +1114,14 @@ AzerothCore's extractor tools, then `scp` to the server's data directory.
   file, apply it by hand (`mysql acore_world < file`, safe since it is idempotent) and
   run in-game `.reload trainer` — no restart needed for list-only changes. Editing the
   file changes its hash, so the updater re-applies it on the next boot too.
-- **`mod-dungeon-quest-guide` has not been tested in game yet.** Server side is verified
-  (SQL applied, creature 900002 and both greetings present, 163 zones indexed, no
-  errors), but no real player has entered a dungeon with it live. To test: take a
-  character into a 5-man (e.g. Deadmines), confirm the guide appears near the entrance
-  facing the arrival point, that its list matches quests the character can actually
-  take, that accepting one adds it to the log, and that the empty-list greeting shows
-  when nothing qualifies. Worth also checking a multi-entrance dungeon (Dire Maul,
-  Maraudon) spawns it at the right door. If a quest is missing or wrongly offered, fix it
-  in `dungeon_quest_guide_override` rather than in code.
+- **`mod-dungeon-quest-guide` works in a single-entrance dungeon.** Confirmed in game
+  2026-09-15: in Deadmines the guide spawned, offered quests, and they could be accepted.
+  Server side was already verified (SQL applied, creature 900002 and both greetings
+  present, 163 zones indexed, no errors).
+  - **Still to check:** a multi-entrance dungeon (Dire Maul, Maraudon) spawns it at the
+    door the party actually used, and the empty-list greeting shows for a character that
+    qualifies for nothing. If a quest is missing or wrongly offered, fix it in
+    `dungeon_quest_guide_override` rather than in code.
 - **Two stale backups hold the dead DB password in plaintext**:
   `/opt/server-status/check_status.sh.bak-20260912_031957` and `.bak-20260912_032152`
   (plus `~/.my.cnf.bak` and the `backups-weekly/*/configs/` copies). The password no
